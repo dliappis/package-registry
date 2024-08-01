@@ -1,0 +1,49 @@
+# This image contains the package-registry binary.
+# It expects packages to be mounted under /packages/package-registry or have a config file loaded into /package-registry/config.yml
+
+ARG BASE_REGISTRY=registry1.dso.mil
+ARG BASE_IMAGE=ironbank/redhat/ubi/ubi9
+ARG BUILDER_IMAGE=golang
+ARG RUNNER_IMAGE=cgr.dev/chainguard/wolfi-base
+
+# Build binary
+FROM ${BASE_REGISTRY}/google/golang/ubi9/golang-1.21:${GO_VERSION} as builder
+#FROM --platform=${BUILDPLATFORM:-linux} ${BUILDER_IMAGE}:${GO_VERSION} AS builder
+
+ENV GOPATH=/go
+ARG GO_VERSION
+
+COPY ./ /package-registry
+WORKDIR /package-registry
+
+ARG TARGETPLATFORM
+
+RUN make release-${TARGETPLATFORM:-linux}
+
+
+# Run binary
+FROM ${RUNNER_IMAGE}
+
+# Get dependencies
+# Mailcap is installed to get mime types information.
+RUN dnf -y update && && \
+    dnf -y install mailcap zip rsync
+
+# Move binary from the builder image
+COPY --from=builder /package-registry/package-registry /package-registry/package-registry
+
+# Change to new working directory
+WORKDIR /package-registry
+
+# Get in config which expects packages in /packages
+COPY config.docker.yml /package-registry/config.yml
+
+# Start registry when container is run an expose it on port 8080
+EXPOSE 8080
+ENTRYPOINT ["./package-registry"]
+
+# Make sure it's accessible from outside the container
+ENV EPR_ADDRESS=0.0.0.0:8080
+
+HEALTHCHECK --interval=1s --retries=30 CMD curl --silent --fail localhost:8080/health || exit 1
+
